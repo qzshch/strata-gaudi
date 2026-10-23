@@ -46,7 +46,7 @@ cmake -S . -B build-hpu-host \
   -DSTRATA_ENABLE_CUDA=OFF -DSTRATA_ENABLE_HIP=OFF \
   -DSTRATA_NATIVE_EXPERTS=OFF -DSTRATA_BUILD_HPU_TOOLS=ON \
   -DSTRATA_BUILD_TESTS=ON -DSTRATA_WERROR=ON
-cmake --build build-hpu-host --config Release --target strata-hpu-plan hpu_expert_plan_test
+cmake --build build-hpu-host --config Release --target strata-hpu-plan hpu_expert_plan_test hpu_tile_stream_test
 ctest --test-dir build-hpu-host -C Release -R '^hpu_' --output-on-failure
 ```
 
@@ -66,6 +66,28 @@ The summary is JSON, the optional placement table is CSV. Without a measured hot
 profile the command uses deterministic layer/expert order, which is reproducible but is not a
 performance policy. The library accepts an explicit priority list. There is no HPU model CLI
 flag that silently dispatches to CUDA, HIP, Python or a fake runtime.
+
+## Bounded file tiles and completion lifetime
+
+`read_packed_rows` seeks to a matrix's exact shard/expert offset and reads only complete rows
+into caller storage. `PackedTileStream` owns a fixed number of fixed-size pageable Host buffers.
+It publishes a generation-tagged ticket only after the complete file read succeeds. A busy slot
+applies backpressure, and an old ticket cannot finish or discard a newer use of the same slot.
+Read failure, missing files, invalid row ranges and undersized slots cannot publish partial data.
+
+The consumer must submit its ticket with a real completion-wait callback. `finish`, explicit
+`close` and destruction wait before recycling or freeing any submitted buffer. Discarding a
+submitted tile is refused: request cancellation alone does not establish DMA completion. A
+failed explicit wait leaves the slot in flight for retry. Completion callbacks must not throw
+during shutdown. These callbacks are the intended connection to a SynapseAI event wait; this
+implementation does not claim native device events, pinned memory, or hardware overlap.
+
+File reads are serialized inside the staging stream and can overlap external consumer work
+in the other slot. Ready-buffer views require caller lifetime coordination until submission.
+The file-byte counter reports successfully requested bytes, without claiming physical NVMe
+traffic. Host bank loading can transiently duplicate file-backed pages with anonymous copies;
+the later loader needs incremental allocation and suitable page-reclaim/advice, followed by
+actual peak-memory measurements. The planner's file-cache allowance is not an OS memory cap.
 
 ## Remaining execution work
 
