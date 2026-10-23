@@ -50,6 +50,17 @@ bool layer_name(const std::string& name, uint32_t& layer, std::string& role) {
     return true;
 }
 struct TensorRecord { TensorInfo info; std::string path; uint64_t absolute = 0, bytes = 0; };
+uint64_t nonnegative_integer(const MetaValue& value, const std::string& key) {
+    switch (value.type) {
+    case MetaType::U8: case MetaType::U16: case MetaType::U32: case MetaType::U64:
+        return value.u;
+    case MetaType::I8: case MetaType::I16: case MetaType::I32: case MetaType::I64:
+        if (value.u <= INT64_MAX) return value.u;
+        break;
+    default: break;
+    }
+    throw std::invalid_argument("HPU planner: nonnegative integer required: " + key);
+}
 }  // namespace
 
 uint64_t PackedMatrix::bytes() const { return mul(rows, row_bytes); }
@@ -74,8 +85,7 @@ ExpertInventory inspect_glm_gguf(const std::vector<std::string>& paths) {
             throw std::invalid_argument("HPU planner: repeated shard path " + path);
         GgufFile file(path);
         if (const auto* number = file.get("split.no")) {
-            if ((number->type != MetaType::U16 && number->type != MetaType::U32 && number->type != MetaType::U64)
-                || !shard_numbers.insert(number->u).second)
+            if (!shard_numbers.insert(nonnegative_integer(*number, "split.no")).second)
                 throw std::invalid_argument("HPU planner: invalid or duplicate split.no");
         }
         if (const auto* arch = file.get("general.architecture")) {
@@ -84,10 +94,9 @@ ExpertInventory inspect_glm_gguf(const std::vector<std::string>& paths) {
             architecture_seen = true;
         }
         for (const auto* key : keys) if (const auto* value = file.get(key)) {
-            if (value->type != MetaType::U32 && value->type != MetaType::U64 && value->type != MetaType::U16)
-                throw std::invalid_argument(std::string("HPU planner: unsigned integer required: ") + key);
-            const auto [it, inserted] = config.emplace(key, value->u);
-            if (!inserted && it->second != value->u)
+            const auto number = nonnegative_integer(*value, key);
+            const auto [it, inserted] = config.emplace(key, number);
+            if (!inserted && it->second != number)
                 throw std::invalid_argument(std::string("HPU planner: inconsistent shard metadata: ") + key);
         }
         for (const auto& t : file.tensors()) {
@@ -104,9 +113,9 @@ ExpertInventory inspect_glm_gguf(const std::vector<std::string>& paths) {
         if (it == config.end()) throw std::invalid_argument(std::string("HPU planner: missing metadata ") + key);
         return it->second;
     };
-    if (!architecture_seen) throw std::invalid_argument("HPU planner: missing general.architecture");
     if (config.contains("split.count") && config.at("split.count") != paths.size())
         throw std::invalid_argument("HPU planner: supply all shards, including the metadata-only shard");
+    if (!architecture_seen) throw std::invalid_argument("HPU planner: missing general.architecture");
     if (config.contains("split.count")) {
         if (shard_numbers.size() != paths.size()) throw std::invalid_argument("HPU planner: each shard requires split.no");
         uint64_t expected = 0;

@@ -28,11 +28,20 @@ def write(path, tensors, *, number=0, count=3, total=7, trunk=2, blocks=3):
         "split.count": count,
         "split.tensors.count": total,
     }
+    if number != 0:
+        # The pinned gguf writer keeps model metadata in shard zero; later shards carry
+        # only split metadata. A metadata-only first shard must still be supplied.
+        metadata = {key: value for key, value in metadata.items() if key.startswith("split.")}
     header = b"GGUF" + struct.pack("<IQQ", 3, len(tensors), len(metadata))
     for key, value in metadata.items():
         header += string(key)
         if isinstance(value, str):
             header += struct.pack("<I", 8) + string(value)
+        elif key == "split.tensors.count":
+            # llama.cpp's writer uses INT32 here (split.no/count are UINT16).
+            header += struct.pack("<Ii", 5, value)
+        elif key in ("split.no", "split.count"):
+            header += struct.pack("<IH", 2, value)
         else:
             header += struct.pack("<IQ", 10, value)  # metadata U64
     directory, body = b"", b""
@@ -110,19 +119,19 @@ class PlannerCli(unittest.TestCase):
 
     def test_declared_tensor_count(self):
         self.fixture()
-        for i, path in enumerate(self.paths):
+        for path in self.paths:
             data = path.read_bytes()
-            # Replace the total U64 independently of the directory, retaining consistent metadata.
-            marker = string("split.tensors.count") + struct.pack("<I", 10)
+            # Replace the total INT32 independently of the directory, retaining consistent metadata.
+            marker = string("split.tensors.count") + struct.pack("<I", 5)
             offset = data.index(marker) + len(marker)
-            path.write_bytes(data[:offset] + struct.pack("<Q", 8) + data[offset + 8:])
+            path.write_bytes(data[:offset] + struct.pack("<i", 8) + data[offset + 4:])
         result = self.run_plan()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("tensor count", result.stderr)
 
     def test_inconsistent_trunk(self):
         self.fixture()
-        for path in self.paths:
+        for path in self.paths[:1]:
             data = path.read_bytes()
             marker = string("glm5-next.trunk_block_count") + struct.pack("<I", 10)
             offset = data.index(marker) + len(marker)
@@ -140,6 +149,13 @@ class PlannerCli(unittest.TestCase):
     def test_negative_budget_rejected(self):
         self.fixture()
         self.assertNotEqual(self.run_plan(None, "--host-gib", "-1").returncode, 0)
+
+    def test_negative_split_tensor_count_rejected(self):
+        self.fixture()
+        write(self.paths[0], [], number=0, total=-1)
+        result = self.run_plan()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("nonnegative integer", result.stderr)
 
 
 if __name__ == "__main__":
