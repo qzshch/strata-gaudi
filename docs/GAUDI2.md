@@ -46,7 +46,7 @@ cmake -S . -B build-hpu-host \
   -DSTRATA_ENABLE_CUDA=OFF -DSTRATA_ENABLE_HIP=OFF \
   -DSTRATA_NATIVE_EXPERTS=OFF -DSTRATA_BUILD_HPU_TOOLS=ON \
   -DSTRATA_BUILD_TESTS=ON -DSTRATA_WERROR=ON
-cmake --build build-hpu-host --config Release --target strata-hpu-plan hpu_expert_plan_test hpu_tile_stream_test
+cmake --build build-hpu-host --config Release --target strata-hpu-plan hpu_expert_plan_test hpu_tile_stream_test hpu_packed_decode_test
 ctest --test-dir build-hpu-host -C Release -R '^hpu_' --output-on-failure
 ```
 
@@ -88,6 +88,41 @@ The file-byte counter reports successfully requested bytes, without claiming phy
 traffic. Host bank loading can transiently duplicate file-backed pages with anonymous copies;
 the later loader needs incremental allocation and suitable page-reclaim/advice, followed by
 actual peak-memory measurements. The planner's file-cache allowance is not an OS memory cap.
+
+## Exact host decoding for HPU tiles
+
+This reference requires a little-endian Host with IEEE-754 binary32; other Hosts fail at
+compile time instead of interpreting the packed codebooks in the wrong byte order.
+
+`decode_packed_bf16` now consumes row-major packed tiles of Q2_K, Q3_K, IQ2_S, IQ3_S and IQ4_XS
+and produces caller-owned row-major BF16 bits using round-to-nearest, ties-to-even. There is
+also a pre-rounding FP32 reference entry point. Unsupported types, partial blocks, short
+buffers, size overflow and overlapping input/output are rejected before decoding. Only one
+256-float block is expanded on the stack; neither a full expert nor a full FP32 tile is allocated.
+
+The implementation reuses Maya's existing scalar Q3_K/IQ4_XS decoding and its exact vendored
+ggml codebooks. IQ2_S/IQ3_S execute the existing CUDA decoder's 32 logical lane mappings on the
+Host; Q2_K follows the same pinned ggml reference. The source and codebooks remain under the
+existing `third_party/ggml/LICENSE`. This is a correctness reference and an input-preparation
+path for the future HPU backend, not a TPC kernel or MME implementation.
+
+Ten deterministic synthetic cases cover all five formats, multiple rows, 512/4096 columns,
+random code/sign/scale bits and half-scale zero/subnormal/normal/negative/max-finite values.
+Expected FP32 and BF16 results come independently from pinned gguf-py; the binary fixture
+contains no model weights. Tests check 48,640 FP32 values and BF16 bit patterns, canary guards,
+unaligned packed input and the real `PackedTileStream` file-row → decoded BF16 path. They also
+exercise BF16 midpoint, signed-zero, infinity and NaN conversion separately. Ordinary CTest
+needs no NumPy, ggml download or GPU SDK. Linux and Windows CI run the same offline checks.
+
+To regenerate the goldens, use NumPy and a llama.cpp checkout at
+`third_party/ggml/VERSION.txt`, then run:
+
+```sh
+python tools/hpu/generate_decode_vectors.py --gguf-py /path/to/llama.cpp/gguf-py
+```
+
+The generator verifies the oracle source SHA-256 and records source revision, seed, output
+hash and NumPy version in `tests/hpu/fixtures/packed_decode_vectors.json`.
 
 ## Remaining execution work
 

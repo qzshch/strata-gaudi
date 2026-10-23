@@ -1,0 +1,21 @@
+{
+  "scope": "Deterministic synthetic codes, no model weights; FP32 and BF16 RNE output.",
+  "oracle_repository": "ggml-org/llama.cpp",
+  "oracle_revision": "3cf03257f219afbe7334045ff7c6a06ac68c627d",
+  "oracle_path": "gguf-py/gguf/quants.py",
+  "oracle_sha256": "2c927a1b3d9f0920dcf4007fb686e1b0999333e9f65ce43dcc689900c0beae8b",
+  "oracle_url": "https://github.com/ggml-org/llama.cpp/blob/3cf03257f219afbe7334045ff7c6a06ac68c627d/gguf-py/gguf/quants.py",
+  "generator": "tools/hpu/generate_decode_vectors.py",
+  "seed": 434897,
+  "cases": 10,
+  "file_sha256": "bd23b57b3d2bcdf1dbe7d5e16b6b47eccbc7e371e2bf0187a8544d376c0b7140",
+  "file_bytes": 311848,
+  "formats": [
+    "Q2_K",
+    "Q3_K",
+    "IQ3_S",
+    "IQ2_S",
+    "IQ4_XS"
+  ],
+  "numpy_version": "2.1.2"
+}
