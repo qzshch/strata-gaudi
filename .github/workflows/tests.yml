@@ -12,7 +12,10 @@ permissions:
 
 jobs:
   hpu-host:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -23,8 +26,8 @@ jobs:
           -DSTRATA_BUILD_TESTS=ON -DSTRATA_WERROR=ON
       - name: Build and check packed expert planning
         run: |
-          cmake --build build-hpu-host --target strata-hpu-plan hpu_expert_plan_test hpu_tile_stream_test -j 2
-          ctest --test-dir build-hpu-host -R '^hpu_' --output-on-failure
+          cmake --build build-hpu-host --config Release --target strata-hpu-plan hpu_expert_plan_test hpu_tile_stream_test -j 2
+          ctest --test-dir build-hpu-host -C Release -R '^hpu_' --output-on-failure
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 20

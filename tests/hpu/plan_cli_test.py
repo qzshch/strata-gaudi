@@ -1,5 +1,6 @@
 """Independent, tiny GGUF writers exercise real split directories; no model download/numpy."""
 import json
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -156,6 +157,27 @@ class PlannerCli(unittest.TestCase):
         result = self.run_plan()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("nonnegative integer", result.stderr)
+
+    def test_placement_output_cannot_overwrite_a_source(self):
+        self.fixture()
+        before = self.paths[1].read_bytes()
+        result = self.run_plan(None, "--placements", str(self.paths[1]))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("aliases a source", result.stderr)
+        self.assertEqual(self.paths[1].read_bytes(), before)
+
+    def test_placement_output_cannot_overwrite_a_hard_link(self):
+        self.fixture()
+        before = self.paths[2].read_bytes()
+        alias = Path(self.temp.name) / "misleading.csv"
+        try:
+            os.link(self.paths[2], alias)
+        except OSError as error:
+            self.skipTest(f"hard links unavailable: {error}")
+        result = self.run_plan(None, "--placements", str(alias))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("aliases a source", result.stderr)
+        self.assertEqual(self.paths[2].read_bytes(), before)
 
 
 if __name__ == "__main__":

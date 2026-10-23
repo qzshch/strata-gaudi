@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -61,6 +62,15 @@ int main(int argc, char** argv) {
         const auto inventory = inspect_glm_gguf(paths);
         const auto plan = plan_experts(inventory, budget);
         if (!placements.empty()) {
+            // A model is often hundreds of GiB: never truncate a source because a CSV
+            // argument names it, including alternate paths, symlinks or hard links.
+            const auto target = std::filesystem::absolute(placements).lexically_normal();
+            for (const auto& source : paths) {
+                std::error_code error;
+                const auto input = std::filesystem::absolute(source).lexically_normal();
+                if (target == input || std::filesystem::equivalent(target, input, error))
+                    throw std::invalid_argument("placement output aliases a source GGUF shard: " + placements);
+            }
             std::ofstream out(placements);
             if (!out) throw std::runtime_error("cannot create placement file " + placements);
             out << "layer,expert,owner,packed_bytes,allocation_bytes,arena_offset\n";
