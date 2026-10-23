@@ -169,6 +169,10 @@ size_t PackedTileStream::resident_bytes() const {
     for (const auto& slot : state_->slots) bytes += slot.buffer.size();
     return bytes;
 }
+size_t PackedTileStream::slot_capacity_bytes() const {
+    std::lock_guard lock(state_->mutex);
+    return state_->slots.empty() ? 0 : state_->slots.front().buffer.size();
+}
 size_t PackedTileStream::busy_slots() const {
     std::lock_guard lock(state_->mutex);
     return static_cast<size_t>(std::count_if(state_->slots.begin(), state_->slots.end(),

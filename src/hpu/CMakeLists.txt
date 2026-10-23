@@ -1,11 +1,11 @@
-add_library(strata_hpu_experts STATIC expert_plan.cpp tile_stream.cpp packed_decode.cpp routing_reference.cpp)
+add_library(strata_hpu_experts STATIC expert_plan.cpp tile_stream.cpp packed_decode.cpp routing_reference.cpp expert_forward.cpp)
 target_include_directories(strata_hpu_experts SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/ggml)
 # The reference codec is deterministic FP32 arithmetic before BF16 RNE, including Q2_K's
 # subtractive min term. A host compiler must not contract that term into a different oracle.
 if(MSVC)
-  set_source_files_properties(packed_decode.cpp routing_reference.cpp PROPERTIES COMPILE_OPTIONS "/fp:strict")
+  set_source_files_properties(packed_decode.cpp routing_reference.cpp expert_forward.cpp PROPERTIES COMPILE_OPTIONS "/fp:strict")
 else()
-  set_source_files_properties(packed_decode.cpp routing_reference.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+  set_source_files_properties(packed_decode.cpp routing_reference.cpp expert_forward.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 endif()
 find_package(Threads REQUIRED)
 target_link_libraries(strata_hpu_experts PUBLIC strata_artifact)
@@ -35,6 +35,11 @@ if(STRATA_BUILD_TESTS)
   add_executable(hpu_glm_routing_test ../../tests/hpu/routing_reference_test.cpp)
   target_link_libraries(hpu_glm_routing_test PRIVATE strata_hpu_experts)
   add_test(NAME hpu_glm_routing_test COMMAND hpu_glm_routing_test)
-  set_tests_properties(hpu_expert_plan_test hpu_plan_cli_test hpu_real_header_plan_test hpu_tile_stream_test hpu_packed_decode_test hpu_glm_routing_test
+  add_executable(hpu_expert_forward_test ../../tests/hpu/expert_forward_test.cpp)
+  target_link_libraries(hpu_expert_forward_test PRIVATE strata_hpu_experts)
+  add_test(NAME hpu_expert_forward_test COMMAND hpu_expert_forward_test
+           ${PROJECT_SOURCE_DIR}/tests/hpu/fixtures/packed_decode_vectors.bin
+           ${CMAKE_CURRENT_BINARY_DIR})
+  set_tests_properties(hpu_expert_plan_test hpu_plan_cli_test hpu_real_header_plan_test hpu_tile_stream_test hpu_packed_decode_test hpu_glm_routing_test hpu_expert_forward_test
                        PROPERTIES TIMEOUT 30)
 endif()

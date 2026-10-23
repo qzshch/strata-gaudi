@@ -23,6 +23,7 @@ static void refuses(const std::function<void()>& f) {
 static void bytes_and_lifetime(const PackedMatrix& matrix) {
     PackedTileStream stream(2, static_cast<size_t>(matrix.row_bytes * 3));
     const auto resident = stream.resident_bytes();
+    CHECK(stream.slot_capacity_bytes() == matrix.row_bytes * 3);
     const auto a = stream.stage(matrix, 0, 3).value();
     const auto b = stream.stage(matrix, 3, 2).value();
     CHECK(a.slot != b.slot && stream.busy_slots() == 2);
@@ -87,6 +88,7 @@ static void bytes_and_lifetime(const PackedMatrix& matrix) {
     CHECK(stream.busy_slots() == 0 && stream.requested_file_bytes() == matrix.row_bytes * 7);
     stream.close();
     CHECK(stream.resident_bytes() == 0);
+    CHECK(stream.slot_capacity_bytes() == 0);
     refuses([&] { stream.stage(matrix, 0, 1); });
 }
 

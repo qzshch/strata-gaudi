@@ -53,6 +53,7 @@ public:
     // only then releases the fixed buffers. Destructor calls close().
     void close();
     size_t resident_bytes() const;
+    size_t slot_capacity_bytes() const;
     size_t busy_slots() const;
     uint64_t requested_file_bytes() const;
 

@@ -141,6 +141,50 @@ boundaries, plus explicit bias-only selection, tie, saturation and invalid-input
 This is a Host reference for later route dispatch, not a router GEMM, device kernel, shared
 expert computation or CPU/HPU result merger. It is not wired into the generation runner.
 
+## Bounded single-expert forward reference
+
+`expert_forward_reference` now evaluates one token through a routed expert's gate/up →
+clamped SwiGLU → down path. Its three matrices can use different supported GGUF formats.
+It reads and decodes bounded row tiles through `PackedTileStream`, retaining only one decoded
+FP32 tile, an FF-width activation vector and a hidden-width candidate output. The caller owns
+the stream and scratch span and must explicitly budget their payload bytes plus the codec's
+one-block stack scratch. File-stream/allocator metadata and OS file cache remain in the
+application's separate Host reserve; this is not an OS memory cap. Failure at any read or
+arithmetic step leaves the caller's output unchanged. Successful in-place input/output is
+supported, while scratch aliasing is refused.
+
+This Host reference's decoded FP32 tile uses four bytes per value; it must not reuse the
+planner's two-byte device BF16-tile allowance. `payload_workspace_bytes` reports only the
+declared CPU payload, including the actual staging-slot allocation, not process RSS or peak
+OS page-cache/allocator usage. The stream must provide one sufficiently large slot; aggregate
+bytes spread across undersized slots do not satisfy the requirement.
+
+`codec_stack_bytes=1024` charges the explicit 256-float expansion. Small local packed-block
+structs and ordinary call-stack overhead are still in the Host reserve; this is not an exact
+measurement or cap on the process stack.
+
+The named profile is **`packed_fp32_fp64_accum`**: exact packed → FP32 weights; left-to-right
+FP64 dot sums cast to FP32; SwiGLU evaluated from those FP32 gate/up values in FP64 and cast
+to FP32; then a FP64 down dot cast to FP32. This deliberately supplies a numerical reference.
+Maya's production CPU lane uses GGML activation quantization and vector dots, and a future
+HPU BF16 MME profile has different storage/reduction boundaries. This function is not either
+production path and makes no throughput or full-model parity claim.
+
+The GLM contract is `gate=min(gate,limit)`, `up=clamp(up,-limit,+limit)`, then `silu(gate)*up`,
+with limit 10 by default. Negative gate values have no lower clamp; there is no 1.702 alpha.
+The result is one **unweighted** expert output: router renormalization/scaling and shared
+expert merging belong outside this function. This agrees with Maya's `glm_ffn.cu` and the
+[fixed Transformers activation](https://github.com/huggingface/transformers/blob/944e22eb226890dec60299386579275a66b3b44d/src/transformers/models/glm5_next/modeling_glm5_next.py#L136).
+
+Tests construct sparse synthetic packed matrices from independent gguf-py golden blocks,
+then compare to a separate sparse FP64 matrix/activation oracle that never calls this
+decoder or forward function. They cover all five formats, mixed gate/up/down types,
+non-divisible row tiles, upper-only gate clipping, both-sided up clipping, workspace and
+alias failures, missing files, non-finite/overflow inputs, late down-read failure and real
+4096-hidden/2048-FF geometry. Each sparse matrix consumes less than 1 MiB of physical fixture
+storage; no real checkpoint or large zero-filled file is created. These are expert-module
+checks, not generation-runner or accelerator validation.
+
 ## Remaining execution work
 
 The packed planner is a preparation tool; the existing CUDA/HIP GLM runner does not use it.
