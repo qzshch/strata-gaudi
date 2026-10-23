@@ -46,7 +46,7 @@ cmake -S . -B build-hpu-host \
   -DSTRATA_ENABLE_CUDA=OFF -DSTRATA_ENABLE_HIP=OFF \
   -DSTRATA_NATIVE_EXPERTS=OFF -DSTRATA_BUILD_HPU_TOOLS=ON \
   -DSTRATA_BUILD_TESTS=ON -DSTRATA_WERROR=ON
-cmake --build build-hpu-host --config Release --target strata-hpu-plan hpu_expert_plan_test hpu_tile_stream_test hpu_packed_decode_test
+cmake --build build-hpu-host --config Release --target strata-hpu-plan hpu_expert_plan_test hpu_tile_stream_test hpu_packed_decode_test hpu_glm_routing_test
 ctest --test-dir build-hpu-host -C Release -R '^hpu_' --output-on-failure
 ```
 
@@ -123,6 +123,23 @@ python tools/hpu/generate_decode_vectors.py --gguf-py /path/to/llama.cpp/gguf-py
 
 The generator verifies the oracle source SHA-256 and records source revision, seed, output
 hash and NumPy version in `tests/hpu/fixtures/packed_decode_vectors.json`.
+
+## Fixed GLM routing reference
+
+`select_glm53_experts` accepts one token's 288 FP32 logits and correction biases.
+It implements the published single-group, top-8 sigmoid router: correction bias affects
+selection only, while original sigmoid scores are normalized by their selected sum plus
+`1e-20` and multiplied by 2.5. The helper uses fixed stack storage and FP32 arithmetic.
+It rejects non-finite inputs. Very negative logits can saturate to zero in FP32; an all-zero
+selection therefore produces zero weights. Equal corrected scores use ascending expert ID
+as a deterministic tie break; framework top-k tie choices and reduction order can differ.
+
+The profile comes from the [official model config](https://huggingface.co/zai-org/GLM-5.3-Flash/blob/main/config.json)
+and the [fixed Transformers implementation](https://github.com/huggingface/transformers/blob/944e22eb226890dec60299386579275a66b3b44d/src/transformers/models/glm5_next/modeling_glm5_next.py#L144).
+Tests use an independent long-double sigmoid/all-pairs rank oracle with distinct selection
+boundaries, plus explicit bias-only selection, tie, saturation and invalid-input cases.
+This is a Host reference for later route dispatch, not a router GEMM, device kernel, shared
+expert computation or CPU/HPU result merger. It is not wired into the generation runner.
 
 ## Remaining execution work
 
