@@ -1,5 +1,10 @@
 <h1 align="center">Project Maya</h1>
 
+> **Gaudi2 development fork:** based on Project Maya commit `8412d5e`. The native
+> [packed-expert planner and bounded transfer work](docs/GAUDI2.md) target one Gaudi2
+> with 64 GiB Host RAM. HPU model execution is not implemented yet; the upstream
+> NVIDIA/AMD features described below do not imply Gaudi support.
+
 <p align="center"><b>GLM-5.3-Flash (321 B) and DeepSeek-V4.1-Flash-1017 (748 B) on your own GPU</b><br>
 private and fast · one NVIDIA GPU or up to 16 · AMD and Windows (experimental) · chat, pictures, OpenAI- and
 Anthropic-compatible API · several requests at once</p>

@@ -11,6 +11,20 @@ permissions:
   contents: read
 
 jobs:
+  hpu-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Gaudi preparation tools without GPU SDKs
+        run: >-
+          cmake -S . -B build-hpu-host -DSTRATA_ENABLE_CUDA=OFF -DSTRATA_ENABLE_HIP=OFF
+          -DSTRATA_NATIVE_EXPERTS=OFF -DSTRATA_BUILD_HPU_TOOLS=ON
+          -DSTRATA_BUILD_TESTS=ON -DSTRATA_WERROR=ON
+      - name: Build and check packed expert planning
+        run: |
+          cmake --build build-hpu-host --target strata-hpu-plan hpu_expert_plan_test -j 2
+          ctest --test-dir build-hpu-host -R '^hpu_' --output-on-failure
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 20

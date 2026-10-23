@@ -154,6 +154,13 @@ add_library(strata_artifact INTERFACE)
 target_include_directories(strata_artifact INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(strata_artifact INTERFACE strata_warnings)
 
+# The Gaudi port starts with the actual packed-artifact and transfer contracts. These tools
+# deliberately need neither CUDA/HIP nor SynapseAI; enabling them does not enable HPU inference.
+option(STRATA_BUILD_HPU_TOOLS "Build the Gaudi packed-expert planner and transfer tests" OFF)
+if(STRATA_BUILD_HPU_TOOLS)
+  add_subdirectory(src/hpu)
+endif()
+
 add_executable(strata-gguf src/artifact/gguf_reader.cpp)
 target_link_libraries(strata-gguf PRIVATE strata_artifact)
 
