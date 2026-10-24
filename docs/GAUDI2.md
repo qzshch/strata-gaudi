@@ -264,14 +264,46 @@ The mHC references are pure per-token math: no projections beyond the mix linear
 binding, no bf16 mix rounding (the HPU production envelope of ~1e-2 relative on gate outputs
 is a later device-path concern), no HPU execution.
 
+## GLM DSA indexer and absorbed-MLA reference
+
+`dsa_reference` implements the audited DSA selection chain and the absorbed sparse
+attention as Host FP32 references, matching the implementation-level research notes
+(fixed commits, cross-checked transformers x llama.cpp x Maya). `dsa_pool_reference`
+compresses COMPLETE pools of 4 tokens with the parity-pinned PER-KEY-ELEMENT softmax
+(gates + learned ape), `dsa_score_reference` applies the two-stage ReLU scoring with
+the transformers scale placement (head_dim^-0.5 inside the ReLU, heads^-0.5 on the
+weights; llama/Maya pre-multiply the combined factor - same product, different
+rounding), and `dsa_select_reference` ranks the visible pools (pool visible iff its
+last member <= the query's global position) stable-descending with ties by lower pool
+index, places each pool at its rank slots, appends the incomplete tail in position
+order (the tail includes the query token itself) and pads with -1 to the fixed 2051
+width. `dsa_attention_reference` consumes the selection rows in absorbed form: scores
+are q_abs . latent scaled by qk_nope^-0.5 (the 256^-0.5 model constant, NOT
+kv_lora^-0.5), the softmax and context accumulation exclude -1 slots entirely, and
+W_V_B applies after the attention per head from the GGUF {kv_lora, v_head, heads}
+layout. NoPE only; the layer's projections (q_a/q_b/kv_a/wk_b/wv_b application,
+LayerNorm'd indexer keys) stay with the future model layer.
+
+Tests cover: long-double pool/score oracles; the ReLU sign boundary; rank/tie/slot
+order, every tail width, the top-pools-zero start-of-sequence row, and visibility
+boundaries; the absorbed attention against an independent long-double oracle on
+hand-built selections, on a full selection (the dense-equivalence case), and with
+duplicate cells; an end-to-end pool->score->select->attend chain asserting the
+selection budget and causality; and the invalid-input family. The GLM constants
+(2051 width, 512 pools, 32x128 indexer, 512 latent / 64 heads / 256 nope) are pinned.
+This is the reference selection and attention math only: streaming pool-state
+maintenance (rep rows, edit invalidation - the llama hybrid-idx protocol) and HPU
+execution remain future work.
+
 ## Remaining execution work
 
 The packed planner is a preparation tool; the existing CUDA/HIP GLM runner does not use it.
 Linux SynapseAI device allocation, pinned Host registration, DMA/event lifetime, recipe
 compilation, bounded TPC quantized decoding and MME GEMMs still need to be wired into a real
-GLM runner. Sparse MLA/indexer, dense/shared experts and Host expert-result merging still
-need independent numerical and continuation tests; the KDA recurrent and chunk references
-above cover the decode and prefill core math, and mHC covers the stream mixing. In
+GLM runner. Dense/shared experts and Host expert-result merging still need independent numerical
+and continuation tests; the KDA recurrent/chunk references cover the decode and prefill
+core math, mHC the stream mixing, and the DSA reference the selection chain and absorbed
+attention (streaming pool-state maintenance is still open). In
 particular, disabling the indexer is not a parity implementation of the model's sparse
 attention. End-to-end quality, 256K context, peak RAM/HBM and throughput require actual
 Gaudi2 validation.
