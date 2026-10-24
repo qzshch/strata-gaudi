@@ -185,13 +185,42 @@ alias failures, missing files, non-finite/overflow inputs, late down-read failur
 storage; no real checkpoint or large zero-filled file is created. These are expert-module
 checks, not generation-runner or accelerator validation.
 
+## GLM KDA core reference
+
+`kda_reference` fixes the audited GLM-5.3-Flash linear-attention profile (34 layers, 64 heads
+of 128, 4-tap short conv, gate lower bound −5.0) and implements the four KDA core stages as
+Host FP32 references: causal per-channel conv + SiLU with an explicit `(d_conv−1) × d_inner`
+state, the safe-path decay gate `lb·sigmoid(exp(A_log)·g)` in log space, the gated delta rule
+scan, and the RMSNorm×weight×sigmoid(g2) output gate. The scan applies FLA l2 norm (eps 1e-6
+inside the sqrt) to q/k, scales q by `head_dim^-0.5`, decays the FP32 state's key-axis rows by
+`exp(gate)`, updates `S += k̂ ⊗ β(v − Sᵀk̂)` and reads `o = Sᵀq̂`. The semantics were
+cross-checked against the fixed-commit FLA fused Triton kernel (which computes the gate and
+l2 norms in-kernel and always exponentiates the log-space value), the transformers
+`glm5_next` modules, llama.cpp's graph and Maya's CUDA kernels.
+
+The scan takes caller scratch holding one state image plus one output image; state and output
+commit together only after the whole scan validates, so an overflowing intermediate leaves
+both untouched. Processing tokens one at a time is bit-identical to one multi-token call,
+including the final state; the conv state has the same split continuity. A zero q vector
+produces exact zero outputs. A finite but out-of-range beta overflows the state mid-scan and
+is rejected with both planes intact — the guard between a caller-side sigmoid bug and silent
+state corruption.
+
+The references are the recurrent (decode) algorithm only: chunk prefill, the qkv/f_a/f_b/g_a/
+g_b/beta projections (plain linears owned by the future model layer), GGUF weight binding and
+any HPU execution are explicitly not implemented. Tests use an independent long-double oracle
+assembled from the FLA naive formulation in a different association order, plus small-profile
+continuity/failure cases and a 64×128-dimension split-continuity smoke; they are not
+generation-runner, hardware or long-context validation.
+
 ## Remaining execution work
 
 The packed planner is a preparation tool; the existing CUDA/HIP GLM runner does not use it.
 Linux SynapseAI device allocation, pinned Host registration, DMA/event lifetime, recipe
 compilation, bounded TPC quantized decoding and MME GEMMs still need to be wired into a real
-GLM runner. KDA FP32 state, sparse MLA/indexer, mHC, dense/shared experts and Host expert-result
-merging need independent numerical and continuation tests. In particular, disabling the
+GLM runner. KDA chunk prefill, sparse MLA/indexer, mHC, dense/shared experts and Host
+expert-result merging still need independent numerical and continuation tests; the KDA
+recurrent reference above covers only the decode-path core math. In particular, disabling the
 indexer is not a parity implementation of the model's sparse attention. End-to-end quality,
 256K context, peak RAM/HBM and throughput require actual Gaudi2 validation.
 
