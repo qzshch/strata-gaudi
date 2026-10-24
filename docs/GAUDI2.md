@@ -213,16 +213,68 @@ assembled from the FLA naive formulation in a different association order, plus 
 continuity/failure cases and a 64×128-dimension split-continuity smoke; they are not
 generation-runner, hardware or long-context validation.
 
+## GLM KDA chunk prefill reference
+
+`kda_chunk_reference` implements the FLA naive chunk algorithm with the audited GLM-5.3
+semantics, sharing the recurrent reference's exact input contract (post-conv q/k/v, log-space
+gate, already-sigmoided beta, in-function l2 norm and query scale). Tokens must be a multiple
+of the chunk width (64 in production; the caller pads tails with g=0/q=k=v=beta=0 rows, which
+the tests prove inert bitwise). Per chunk and head: a rebased per-chunk cumsum of the log gate;
+the decayed key Gram computed from differences only — every exponent is
+`gsum[later] - gsum[earlier] <= 0`, so the factored product form that overflows fp32 on long
+chunks is never used; the unit-diagonal strict-lower system solved by exact forward
+substitution (no Neumann approximation); the LATER token's beta scaling the Gram rows and the
+EARLIER (column) token's beta scaling the u/w operands, with the (T+I) diagonal carrying the
+own token's beta; Aqk keeping its diagonal; and the chunk-affine state update. The index
+conventions were pinned by a numpy translation of the FLA naive source verified against the
+naive recurrent scan to 1e-16 in float64 before the C++ port; the C++ was then debugged to
+that Python reorganization (one transposed Gram orientation and one beta stride slip, both
+caught by the per-token oracle diff).
+
+Tests compare every chunk width (2/4/8) against an independent long-double RECURRENT oracle
+(proving the reorganization, not a shared bug), against the fp32 recurrent reference within
+the association band, split-call versus whole-call continuation, bitwise-inert zero padding,
+the full 64×128 GLM profile at 128 tokens against the recurrent reference, and the invalid
+size/NaN family. Scratch is caller-owned: one state image plus one output image (same
+validate-then-commit contract as the scan) plus one reusable per-head work plane of
+`chunk*(chunk + 6*head_dim + 1)` values. This is the reference algorithm only: no varlen
+packing, no TPC/MME layout, and the abotsis HPU lazy-path miscompile list (stride-0 expand
+into batched matmul, Hillis-Steele scan) still applies to any future device port.
+
+## GLM mHC reference
+
+`mhc_reference` fixes the audited mHC geometry (4 streams, 20 Sinkhorn iterations, hc_eps 1e-6,
+unweighted RMS eps 1e-5 over the flattened 16384-wide stream plane) and implements the three
+pieces a decoder layer needs. `mhc_pre_reference` normalizes the flattened streams, runs the
+24-lane mix projection in FP32, and produces pre = sigmoid+scaled+base then +eps,
+post = 2·sigmoid(...), and comb from the flat checkpoint layout `comb[dst + hc*src]` as a
+softmax over dst followed by the pinned Sinkhorn order — one column normalization over src,
+then 19 rounds of row-then-column, each denominator carrying hc_eps — plus the
+pre-weighted stream collapse. `mhc_post_reference` applies
+`out[dst] = post[dst]*block + sum_src comb[src,dst]*residual[src]` per token (staged, so an
+out aliasing the residual never mixes values), and `mhc_head_reference` is the final
+unweighted mean. Semantics were cross-checked against transformers, llama.cpp's graph, Maya's
+reference and sglang's wiring; the abotsis parity test's documented history — an internal
+mirror silently using softmax for pre shipped a TPC kernel oracle-tested to the wrong
+function — is why these tests derive their oracle from the transformers module directly, keep
+`pre sums != 1` as an invariant, and probe the flat comb layout with a one-hot base. The
+iters=1-vs-20 comparison pins that Sinkhorn actually iterates while gates stay iteration-free.
+
+The mHC references are pure per-token math: no projections beyond the mix linear, no GGUF
+binding, no bf16 mix rounding (the HPU production envelope of ~1e-2 relative on gate outputs
+is a later device-path concern), no HPU execution.
+
 ## Remaining execution work
 
 The packed planner is a preparation tool; the existing CUDA/HIP GLM runner does not use it.
 Linux SynapseAI device allocation, pinned Host registration, DMA/event lifetime, recipe
 compilation, bounded TPC quantized decoding and MME GEMMs still need to be wired into a real
-GLM runner. KDA chunk prefill, sparse MLA/indexer, mHC, dense/shared experts and Host
-expert-result merging still need independent numerical and continuation tests; the KDA
-recurrent reference above covers only the decode-path core math. In particular, disabling the
-indexer is not a parity implementation of the model's sparse attention. End-to-end quality,
-256K context, peak RAM/HBM and throughput require actual Gaudi2 validation.
+GLM runner. Sparse MLA/indexer, dense/shared experts and Host expert-result merging still
+need independent numerical and continuation tests; the KDA recurrent and chunk references
+above cover the decode and prefill core math, and mHC covers the stream mixing. In
+particular, disabling the indexer is not a parity implementation of the model's sparse
+attention. End-to-end quality, 256K context, peak RAM/HBM and throughput require actual
+Gaudi2 validation.
 
 The host tests are correctness checks for artifact layout, byte accounting and ownership;
 they are not hardware tests or model-quality results.
